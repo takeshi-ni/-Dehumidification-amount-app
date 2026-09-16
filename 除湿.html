@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>除湿量・結露リスク計算ツール | 設備設計支援</title>
+    <style>
+        body { font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif; background-color: #f4f7f6; color: #333; line-height: 1.6; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { font-size: 1.5rem; color: #0056b3; border-bottom: 2px solid #0056b3; padding-bottom: 10px; margin-bottom: 20px; }
+        h2 { font-size: 1.2rem; color: #444; margin-top: 30px; border-left: 4px solid #0056b3; padding-left: 10px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 0.9rem; }
+        input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1rem; }
+        button { width: 100%; padding: 15px; font-size: 1.1rem; background-color: #0056b3; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 20px; font-weight: bold; }
+        button:hover { background-color: #004494; }
+        #result-area { display: none; margin-top: 30px; padding: 20px; background-color: #e9ecef; border-radius: 4px; }
+        .result-item { margin-bottom: 10px; font-size: 1.05rem; }
+        .alert { color: #dc3545; font-weight: bold; }
+        .safe { color: #28a745; font-weight: bold; }
+        .note { font-size: 0.8rem; color: #666; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>空調・冷凍設備 除湿量および結露リスク計算ツール</h1>
+    <p>対象空間の各種条件を入力し、「計算を実行する」をクリックしてください。</p>
+
+    <h2>1. 空間・換気条件</h2>
+    <div class="grid">
+        <div class="input-group">
+            <label>空間体積 (m³)</label>
+            <input type="number" id="volume" value="1800" step="1">
+        </div>
+        <div class="input-group">
+            <label>換気回数または外気侵入 (回/h)</label>
+            <input type="number" id="ach" value="0.5" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>負荷安全率 (%)</label>
+            <input type="number" id="safety-factor" value="25" step="1">
+        </div>
+    </div>
+
+    <h2>2. 温湿度条件</h2>
+    <div class="grid">
+        <div class="input-group">
+            <label>流入外気 温度 (℃)</label>
+            <input type="number" id="temp-in" value="25" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>流入外気 相対湿度 (%)</label>
+            <input type="number" id="rh-in" value="80" step="1">
+        </div>
+        <div class="input-group">
+            <label>目標室内 温度 (℃)</label>
+            <input type="number" id="temp-target" value="23" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>目標室内 相対湿度 (%)</label>
+            <input type="number" id="rh-target" value="60" step="1">
+        </div>
+    </div>
+
+    <h2>3. 熱通過条件（床面・パネル等）</h2>
+    <div class="grid">
+        <div class="input-group">
+            <label>隣接庫内 温度 (℃)</label>
+            <input type="number" id="temp-fridge" value="5" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>断熱材厚み (mm)</label>
+            <input type="number" id="insulation-d" value="50" step="1">
+        </div>
+        <div class="input-group">
+            <label>断熱材熱伝導率 (W/(m·K))</label>
+            <input type="number" id="insulation-lambda" value="0.024" step="0.001">
+        </div>
+    </div>
+
+    <button onclick="calculate()">計算を実行する</button>
+
+    <div id="result-area">
+        <h2>計算結果</h2>
+        <div id="results"></div>
+    </div>
+    
+    <div class="note">
+        ※本計算は標準大気圧（1013.25 hPa）、標準空気密度（1.2 kg/m³）、熱伝達率（屋内外ともに9.3 W/(m²·K)）を前提とした理論値です。<br>
+        ※Tetensの式を用いて水蒸気圧を算出しています。機器選定の際は必ず各メーカーの能力線図（性能曲線）にて補正を行ってください。
+    </div>
+</div>
+
+<script>
+    // 物理定数
+    const P = 1013.25; // 標準大気圧 [hPa]
+    const RHO = 1.2; // 空気密度 [kg/m³]
+    const ALPHA = 9.3; // 表面熱伝達率 [W/(m²·K)]
+
+    // 飽和水蒸気圧の算出 (Tetensの式)
+    function getSatVaporPressure(t) {
+        return 6.1078 * Math.pow(10, (7.5 * t) / (t + 237.3));
+    }
+
+    // 絶対湿度の算出 [g/kg(DA)]
+    function getAbsHumidity(t, rh) {
+        const E = getSatVaporPressure(t);
+        const Pv = E * (rh / 100);
+        return 0.622 * (Pv / (P - Pv)) * 1000;
+    }
+
+    // 露点温度の算出 [℃]
+    function getDewPoint(t, rh) {
+        const E = getSatVaporPressure(t);
+        const Pv = E * (rh / 100);
+        const logPv = Math.log10(Pv / 6.1078);
+        return (237.3 * logPv) / (7.5 - logPv);
+    }
+
+    function calculate() {
+        // 入力値の取得
+        const V = parseFloat(document.getElementById('volume').value);
+        const ACH = parseFloat(document.getElementById('ach').value);
+        const SF = 1 + (parseFloat(document.getElementById('safety-factor').value) / 100);
+        
+        const t_in = parseFloat(document.getElementById('temp-in').value);
+        const rh_in = parseFloat(document.getElementById('rh-in').value);
+        const t_tgt = parseFloat(document.getElementById('temp-target').value);
+        const rh_tgt = parseFloat(document.getElementById('rh-target').value);
+        
+        const t_fri = parseFloat(document.getElementById('temp-fridge').value);
+        const d_ins_m = parseFloat(document.getElementById('insulation-d').value) / 1000; // mm to m
+        const lam_ins = parseFloat(document.getElementById('insulation-lambda').value);
+
+        // 1. 空気状態の計算
+        const x_in = getAbsHumidity(t_in, rh_in);
+        const x_tgt = getAbsHumidity(t_tgt, rh_tgt);
+        const dew_tgt = getDewPoint(t_tgt, rh_tgt);
+
+        // 2. 除湿量の計算
+        const Qv = V * ACH; // 換気量 [m³/h]
+        const W_base = Qv * RHO * ((x_in - x_tgt) / 1000); // 基準除湿量 [kg/h]
+        const W_total = W_base * SF; // 安全率考慮 [kg/h]
+        const W_day = W_total * 24; // [L/日]
+
+        // 3. 熱貫流率と表面温度の計算
+        const K = 1 / ((1/ALPHA) + (d_ins_m/lam_ins) + (1/ALPHA)); // 熱貫流率 [W/(m²·K)]
+        const T_surface = t_tgt - (K * (t_tgt - t_fri) / ALPHA); // 表面温度 [℃]
+
+        // 4. 結露判定
+        let riskText = "";
+        let riskClass = "";
+        if (T_surface <= dew_tgt) {
+            riskText = `【警告】表面温度（${T_surface.toFixed(1)}℃）が露点温度（${dew_tgt.toFixed(1)}℃）を下回っています。結露が発生します。`;
+            riskClass = "alert";
+        } else {
+            riskText = `【安全】表面温度（${T_surface.toFixed(1)}℃）は露点温度（${dew_tgt.toFixed(1)}℃）を上回っており、平面部の結露リスクは低いです。`;
+            riskClass = "safe";
+        }
+
+        // 結果の描画
+        const resDiv = document.getElementById('results');
+        resDiv.innerHTML = `
+            <div class="result-item"><strong>流入外気の絶対湿度:</strong> ${x_in.toFixed(2)} g/kg(DA)</div>
+            <div class="result-item"><strong>目標室内の絶対湿度:</strong> ${x_tgt.toFixed(2)} g/kg(DA) (露点温度: ${dew_tgt.toFixed(1)} ℃)</div>
+            <hr>
+            <div class="result-item"><strong>基本除湿負荷 (換気分):</strong> ${W_base.toFixed(2)} kg/h</div>
+            <div class="result-item" style="font-size: 1.2rem; color: #0056b3;"><strong>必要除湿能力 (安全率考慮):</strong> ${W_total.toFixed(2)} kg/h （約 ${W_day.toFixed(1)} L/日）</div>
+            <hr>
+            <div class="result-item"><strong>断熱パネル表面温度:</strong> ${T_surface.toFixed(1)} ℃</div>
+            <div class="result-item ${riskClass}">${riskText}</div>
+        `;
+        document.getElementById('result-area').style.display = 'block';
+    }
+</script>
+
+</body>
+</html>
